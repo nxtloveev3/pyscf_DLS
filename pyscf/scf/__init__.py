@@ -121,7 +121,6 @@ from pyscf.scf.uhf import spin_square
 from pyscf.scf.hf import get_init_guess
 from pyscf.scf.addons import *
 
-
 def HF(mol, *args):
     if mol.nelectron == 1 or mol.spin == 0:
         return RHF(mol, *args)

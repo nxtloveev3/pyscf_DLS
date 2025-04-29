@@ -22,7 +22,6 @@ Hartree-Fock
 
 import sys
 import tempfile
-
 from functools import reduce
 import numpy
 import scipy.linalg
@@ -36,6 +35,10 @@ from pyscf.scf import chkfile
 from pyscf.scf import dispersion
 from pyscf.data import nist
 from pyscf import __config__
+from pyscf.scf.data_processing import process_orbital_data, generate_features
+from sklearn.ensemble import GradientBoostingClassifier
+import pickle
+import os
 
 
 WITH_META_LOWDIN = getattr(__config__, 'scf_analyze_with_meta_lowdin', True)
@@ -168,6 +171,14 @@ Keyword argument "init_dm" is replaced by "dm0"''')
     fock_last = None
     cput1 = logger.timer(mf, 'initialize scf', *cput0)
     mf.cycles = 0
+
+    # Storing SCF information for ML model prediction
+    en_tot_10 = []
+    alpha_gap_10 = []
+    homo_alpha_10 = []
+    homo_1_beta_10 = []
+    homo_beta_10 = []
+    
     for cycle in range(mf.max_cycle):
         dm_last = dm
         last_hf_e = e_tot
@@ -190,6 +201,56 @@ Keyword argument "init_dm" is replaced by "dm0"''')
         norm_ddm = numpy.linalg.norm(dm-dm_last)
         logger.info(mf, 'cycle= %d E= %.15g  delta_E= %4.3g  |g|= %4.3g  |ddm|= %4.3g',
                     cycle+1, e_tot, e_tot-last_hf_e, norm_gorb, norm_ddm)
+        
+        if isinstance(mo_energy[0], numpy.ndarray):
+            alpha_gap, homo_alpha, homo_1_beta, homo_beta = process_orbital_data(mo_energy, mo_occ)
+            en_tot_10.append(e_tot)
+            alpha_gap_10.append(alpha_gap)
+            homo_alpha_10.append(homo_alpha)
+            homo_1_beta_10.append(homo_1_beta)
+            homo_beta_10.append(homo_beta)
+
+            if cycle % 10 == 0 and cycle != 0:
+                try:
+                    model_path = os.path.join(os.path.dirname(__file__), 'gb_small_no_diis_2k_tst.pkl')
+                    with open(model_path, "rb") as file:
+                        gb = pickle.load(file)
+                except FileNotFoundError:
+                    logger.error(mf, 'ML model file not found.')
+                    raise
+                except pickle.UnpicklingError:
+                    logger.error(mf, 'Error loading ML model file.')
+                    raise
+
+                logger.info(mf, 'Features Input: %s', en_tot_10)
+
+                features = generate_features(en_tot_10, homo_alpha_10, homo_1_beta_10, homo_beta_10, alpha_gap_10)
+
+                logger.info(mf, 'Features used for ML prediction: %s', features)
+                
+                need_ls = bool(gb.predict(features))
+
+                # Use ML model to predict whether level shifting is needed
+                if need_ls:
+                    # Set level shifting for both alpha and beta spins
+                    alpha_shift = 0.2  # Example value for alpha spin
+                    beta_shift = 0.0   # Example value for beta spin
+                    mf.level_shift = (alpha_shift, beta_shift)
+                    logger.info(mf, 'Level shifting turned ON: Alpha= %.3g, Beta= %.3g', alpha_shift, beta_shift)
+                else:
+                    # Remove level shifting
+                    if mf.level_shift != (0.0, 0.0):
+                        mf.level_shift = (0.0, 0.0)
+                        logger.info(mf, 'Level shifting turned OFF')
+                    else:
+                        logger.info(mf, 'Level shifting is not necessary')
+                
+                en_tot_10 = []
+                alpha_gap_10 = []
+                homo_alpha_10 = []
+                homo_1_beta_10 = []
+                homo_beta_10 = []
+
 
         if callable(mf.check_convergence):
             scf_conv = mf.check_convergence(locals())
