@@ -178,6 +178,7 @@ Keyword argument "init_dm" is replaced by "dm0"''')
     homo_alpha_10 = []
     homo_1_beta_10 = []
     homo_beta_10 = []
+    ls_cycles = 0
     
     for cycle in range(mf.max_cycle):
         dm_last = dm
@@ -210,9 +211,21 @@ Keyword argument "init_dm" is replaced by "dm0"''')
             homo_1_beta_10.append(homo_1_beta)
             homo_beta_10.append(homo_beta)
 
-            if cycle % 10 == 0 and cycle != 0:
+            # Keep only the last 10 iterations in the lists
+            if len(en_tot_10) > 10:
+                en_tot_10.pop(0)
+            if len(alpha_gap_10) > 10:
+                alpha_gap_10.pop(0)
+            if len(homo_alpha_10) > 10:
+                homo_alpha_10.pop(0)
+            if len(homo_1_beta_10) > 10:
+                homo_1_beta_10.pop(0)
+            if len(homo_beta_10) > 10:
+                homo_beta_10.pop(0)
+
+            if cycle >= 10:
                 try:
-                    model_path = os.path.join(os.path.dirname(__file__), 'gb_small_no_diis_2k_tst.pkl')
+                    model_path = os.path.join(os.path.dirname(__file__), 'gb_2k_no_diis_tuned_new.pkl')
                     with open(model_path, "rb") as file:
                         gb = pickle.load(file)
                 except FileNotFoundError:
@@ -221,8 +234,6 @@ Keyword argument "init_dm" is replaced by "dm0"''')
                 except pickle.UnpicklingError:
                     logger.error(mf, 'Error loading ML model file.')
                     raise
-
-                logger.info(mf, 'Features Input: %s', en_tot_10)
 
                 features = generate_features(en_tot_10, homo_alpha_10, homo_1_beta_10, homo_beta_10, alpha_gap_10)
 
@@ -233,23 +244,41 @@ Keyword argument "init_dm" is replaced by "dm0"''')
                 # Use ML model to predict whether level shifting is needed
                 if need_ls:
                     # Set level shifting for both alpha and beta spins
-                    alpha_shift = 0.2  # Example value for alpha spin
-                    beta_shift = 0.0   # Example value for beta spin
-                    mf.level_shift = (alpha_shift, beta_shift)
-                    logger.info(mf, 'Level shifting turned ON: Alpha= %.3g, Beta= %.3g', alpha_shift, beta_shift)
+                    if mf.level_shift == 0 or mf.level_shift == (0.0, 0.0): # Check if level shifting is off
+                        alpha_shift = 0.2  # Example value for alpha spin
+                        beta_shift = 0.0   # Example value for beta spin
+                        mf.level_shift = (alpha_shift, beta_shift)
+                        logger.info(mf, 'Level shifting turned ON: Alpha= %.3g, Beta= %.3g', alpha_shift, beta_shift)
+                        ls_cycles += 1
+                    elif ls_cycles == 10: # Increase level shifting after 10 cycles
+                        alpha_shift, beta_shift = mf.level_shift
+                        alpha_shift += 0.1
+                        #beta_shift += 0.1
+                        mf.level_shift = (alpha_shift, beta_shift)
+                        logger.info(mf, 'Level shifting increased: Alpha= %.3g, Beta= %.3g', alpha_shift, beta_shift)
+                        ls_cycles = 0
+                    else: # Maintain current level shifting
+                        alpha_shift, beta_shift = mf.level_shift
+                        logger.info(mf, 'Level shifting maintained: Alpha= %.3g, Beta= %.3g', alpha_shift, beta_shift)
+                        ls_cycles += 1
                 else:
                     # Remove level shifting
-                    if mf.level_shift != (0.0, 0.0):
-                        mf.level_shift = (0.0, 0.0)
-                        logger.info(mf, 'Level shifting turned OFF')
+                    if mf.level_shift != (0.0, 0.0): 
+                        if mf.level_shift == 0:
+                            logger.info(mf, 'Level shifting is not necessary')
+                        else:
+                            logger.info(mf, f'Level shifting turned OFF. Previous value: {mf.level_shift}')
+                            mf.level_shift = (0.0, 0.0)
+                            # Reset the cycle counter for level shifting
+                            ls_cycles = 0
                     else:
                         logger.info(mf, 'Level shifting is not necessary')
                 
-                en_tot_10 = []
-                alpha_gap_10 = []
-                homo_alpha_10 = []
-                homo_1_beta_10 = []
-                homo_beta_10 = []
+                # en_tot_10 = []
+                # alpha_gap_10 = []
+                # homo_alpha_10 = []
+                # homo_1_beta_10 = []
+                # homo_beta_10 = []
 
 
         if callable(mf.check_convergence):
